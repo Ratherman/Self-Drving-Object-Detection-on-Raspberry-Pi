@@ -77,7 +77,7 @@ class SqueezeDet():
         pred_reshaped = Reshape((self.config.ANCHORS, -1))(preds)
 
         #pad for loss function so y_pred and y_true have the same dimensions, wrap in lambda layer
-        pred_padded = Lambda(self._pad)( pred_reshaped)
+        pred_padded = Lambda(self._pad)(pred_reshaped)
 
         model = Model(inputs=input_layer, outputs=pred_padded)
 
@@ -126,8 +126,10 @@ class SqueezeDet():
         #return K.concatenate( [input, pad], axis=-1)
 
 
-        padding = np.zeros((3,2))
-        padding[2,1] = 4
+        # padding = np.zeros((3,2))
+        # padding[2,1] = 4
+        
+        padding = tf.constant([[0,0],[0,0],[0,4]])
         return tf.pad(input, padding ,"CONSTANT")
 
     def loss(self, y_true, y_pred):
