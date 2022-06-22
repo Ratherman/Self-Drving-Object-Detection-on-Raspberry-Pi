@@ -46,6 +46,123 @@ def sparse_to_dense(sp_indices, output_shape, values, default_value=0):
     array[tuple(idx)] = value
   return array
 
+def tensor_iou(box1, box2, input_mask, config):
+    """Computes pairwise IOU of two lists of boxes
+    
+    Arguments:
+        box1 {[type]} -- First list of boxes
+        box2 {[type]} -- Second list of boxes
+        input_mask {[type]} -- Zero-One indicating which boxes to compute
+        config {[type]} -- dict containing hyperparameters
+    
+    Returns:
+        [type] -- [description]
+    """
+
+    
+    xmin = K.maximum(box1[0], box2[0])
+    ymin = K.maximum(box1[1], box2[1])
+    xmax = K.minimum(box1[2], box2[2])
+    ymax = K.minimum(box1[3], box2[3])
+
+    w = K.maximum(0.0, xmax - xmin)
+    h = K.maximum(0.0, ymax - ymin)
+
+    intersection = w * h
+
+    w1 = box1[2] - box1[0]
+    h1 = box1[3] - box1[1]
+    w2 = box2[2] - box2[0]
+    h2 = box2[3] - box2[1]
+
+    union = w1 * h1 + w2 * h2 - intersection
+
+    return intersection / (union + config.EPSILON) * K.reshape(input_mask, [config.BATCH_SIZE, config.ANCHORS])
+
+def bbox_transform(bbox):
+    """convert a bbox of form [cx, cy, w, h] to [xmin, ymin, xmax, ymax]. Works
+    for numpy array or list of tensors.
+    """
+    cx, cy, w, h = bbox
+    out_box = [[]]*4
+    out_box[0] = cx-w/2
+    out_box[1] = cy-h/2
+    out_box[2] = cx+w/2
+    out_box[3] = cy+h/2
+
+    return out_box
+
+def boxes_from_deltas(pred_box_delta, config):
+    """
+    Converts prediction deltas to bounding boxes
+    
+    Arguments:
+        pred_box_delta {[type]} -- tensor of deltas
+        config {[type]} -- hyperparameter dict
+    
+    Returns:
+        [type] -- tensor of bounding boxes
+    """
+
+
+
+    # Keras backend allows no unstacking
+
+    delta_x = pred_box_delta[:, :, 0]
+    delta_y = pred_box_delta[:, :, 1]
+    delta_w = pred_box_delta[:, :, 2]
+    delta_h = pred_box_delta[:, :, 3]
+
+    # get the coordinates and sizes of the anchor boxes from config
+
+    anchor_x = config.ANCHOR_BOX[:, 0]
+    anchor_y = config.ANCHOR_BOX[:, 1]
+    anchor_w = config.ANCHOR_BOX[:, 2]
+    anchor_h = config.ANCHOR_BOX[:, 3]
+
+    # as we only predict the deltas, we need to transform the anchor box values before computing the loss
+
+    # box_center_x = K.identity(anchor_x + delta_x * anchor_w)
+    # box_center_y = K.identity(anchor_y + delta_y * anchor_h)
+    # box_width = K.identity(anchor_w * safe_exp(delta_w, config.EXP_THRESH))
+    # box_height = K.identity(anchor_h * safe_exp(delta_h, config.EXP_THRESH))
+    # K.identity is depreciated, try tf.identity instead
+    # https://www.tensorflow.org/api_docs/python/tf/identity
+    box_center_x = tf.identity(anchor_x + delta_x * anchor_w)
+    box_center_y = tf.identity(anchor_y + delta_y * anchor_h)
+    box_width = tf.identity(anchor_w * safe_exp(delta_w, config.EXP_THRESH))
+    box_height = tf.identity(anchor_h * safe_exp(delta_h, config.EXP_THRESH))
+    # tranform into a real box with four coordinates
+
+    xmins, ymins, xmaxs, ymaxs = bbox_transform([box_center_x, box_center_y, box_width, box_height])
+
+    # trim boxes if predicted outside
+
+    xmins = K.minimum(K.maximum(0.0, xmins), config.IMAGE_WIDTH - 1.0)
+    ymins = K.minimum(K.maximum(0.0, ymins), config.IMAGE_HEIGHT - 1.0)
+    xmaxs = K.maximum(K.minimum(config.IMAGE_WIDTH - 1.0, xmaxs), 0.0)
+    ymaxs = K.maximum(K.minimum(config.IMAGE_HEIGHT - 1.0, ymaxs), 0.0)
+
+    det_boxes = K.permute_dimensions(K.stack(bbox_transform_inv([xmins, ymins, xmaxs, ymaxs])), (1, 2, 0))
+    
+    return (det_boxes)
+
+def safe_exp(w, thresh):
+  """Safe exponential function for tensors."""
+
+  slope = np.exp(thresh)
+  lin_bool = w > thresh
+
+  lin_region = K.cast(lin_bool, dtype='float32')
+
+  lin_out = slope*(w - thresh + 1.)
+
+  exp_out = K.exp(K.switch(lin_bool, K.zeros_like(w), w))
+
+  out = lin_region*lin_out + (1.-lin_region)*exp_out
+
+  return out
+
 def bbox_transform_inv(bbox):
     """convert a bbox of form [xmin, ymin, xmax, ymax] to [cx, cy, w, h]. Works
     for numpy array or list of tensors.
@@ -61,3 +178,50 @@ def bbox_transform_inv(bbox):
     out_box[3]  = height
 
     return out_box
+
+def slice_predictions(y_pred, config):
+    """
+    :param y_pred: network output
+    :param config: config file
+    :return: unpadded and sliced predictions
+    """
+    
+    # calculate non padded entries
+    n_outputs = config.CLASSES + 1 + 4
+    # slice and reshape network output
+    y_pred = y_pred[:, :, 0:n_outputs]
+    y_pred = K.reshape(y_pred, (config.BATCH_SIZE, config.N_ANCHORS_HEIGHT, config.N_ANCHORS_WIDTH, -1))
+    
+    # number of class probabilities, n classes for each anchor
+    
+    num_class_probs = config.ANCHOR_PER_GRID * config.CLASSES
+
+    # slice pred tensor to extract class pred scores and then normalize them
+    pred_class_probs = K.reshape(
+        K.softmax(
+            K.reshape(
+                y_pred[:, :, :, :num_class_probs],
+                [-1, config.CLASSES]
+            )
+        ),
+        [config.BATCH_SIZE, config.ANCHORS, config.CLASSES],
+    )
+
+    # number of confidence scores, one for each anchor + class probs
+    num_confidence_scores = config.ANCHOR_PER_GRID + num_class_probs
+
+    # slice the confidence scores and put them trough a sigmoid for probabilities
+    pred_conf = K.sigmoid(
+        K.reshape(
+            y_pred[:, :, :, num_class_probs:num_confidence_scores],
+            [config.BATCH_SIZE, config.ANCHORS]
+        )
+    )
+
+    # slice remaining bounding box_deltas
+    pred_box_delta = K.reshape(
+        y_pred[:, :, :, num_confidence_scores:],
+        [config.BATCH_SIZE, config.ANCHORS, 4]
+    )
+    
+    return [pred_class_probs, pred_conf, pred_box_delta]

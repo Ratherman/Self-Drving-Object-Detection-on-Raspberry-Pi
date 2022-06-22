@@ -14,3 +14,6 @@ conda install -c conda-forge easydict
 
 conda install -c conda-forge opencv 
 ```
+
+# Ref
+https://github.com/omni-us/squeezedet-keras

@@ -96,6 +96,7 @@ def read_image_and_gt(img_files, gt_files, config):
 
 
         #open img
+        #print(img_name)
         img = cv2.imread(img_name).astype(np.float32, copy=False)
 
 
@@ -246,7 +247,7 @@ def read_image_and_gt(img_files, gt_files, config):
 
     return imgs, Y
 
-@threadsafe_generator
+#@threadsafe_generator
 def generator_from_data_path(img_names, gt_names, config, return_filenames=False, shuffle=False ):
     """
     Generator that yields (X, Y)
