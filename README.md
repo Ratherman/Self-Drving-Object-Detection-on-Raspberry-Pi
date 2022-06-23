@@ -12,7 +12,9 @@ conda install tensorflow
 
 conda install -c conda-forge easydict
 
-conda install -c conda-forge opencv 
+conda install -c conda-forge opencv
+
+conda install matplotlib
 ```
 
 # Ref
