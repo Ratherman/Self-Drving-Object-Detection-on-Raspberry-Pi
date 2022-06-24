@@ -21,6 +21,8 @@ conda install -c conda-forge easydict
 conda install -c conda-forge opencv
 
 conda install matplotlib
+
+conda insatll h5py
 ```
 
 # Ref
